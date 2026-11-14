@@ -1,266 +1,477 @@
--- n4th + perbaikan error kompilasi + AFK Drop Semua Seed + FPS Boost + susunan menu baru (v8)
--- Tiap bagian dipasang sendiri-sendiri. Kalau salah satu tidak cocok dengan script terbaru,
--- bagian itu dilewati dan yang lain tetap jalan. Urutan percobaan kompilasi:
---   semua yang berhasil dipasang  ->  perbaikan saja  ->  script asli.
-assert(type(loadstring) == "function", "[AFK] Executor tidak menyediakan loadstring")
-local repository = "ZennJxD/n4th"
-local httpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
----------------------------------------------------------------------
--- PERBAIKAN: bungkus blok World Finder jadi fungsi (batas 200 variabel local)
----------------------------------------------------------------------
-local FIX = {
-    {
-        name = "buka bungkus World Finder",
-        old = "-- WORLD FINDER: pindah world dan verifikasi seluruh foreground sebelum menyebutnya tanpa lock.\ndo\n",
-        new = "-- WORLD FINDER: pindah world dan verifikasi seluruh foreground sebelum menyebutnya tanpa lock.\ndo (function()\n",
-    },
-    {
-        name = "tutup bungkus World Finder",
-        old = "end\n\n-- ===== TAB: WORLD FINDER =====",
-        new = "end)() end\n\n-- ===== TAB: WORLD FINDER =====",
-    },
-}
-
----------------------------------------------------------------------
--- FITUR AFK: drop semua seed yang stack-nya penuh (200)
----------------------------------------------------------------------
-local AFK = {
-    {
-        name = "tabel AutoDrop",
-        old = [==[local AutoDrop = {]==],
-        new = [==[local AutoDrop = {
-    AllSeeds = false,]==],
-    },
-    {
-        name = "config AutoDrop",
-        old = [==[Config.add("AutoDrop", AutoDrop, { "Items", "World", "X", "Y", "Facing" })]==],
-        new = [==[Config.add("AutoDrop", AutoDrop, { "Items", "World", "X", "Y", "Facing", "AllSeeds" })]==],
-    },
-    {
-        name = "fungsi seed penuh",
-        old = [==[function AutoDrop.labels()]==],
-        new = [==[function AutoDrop.covers(id)
-        if table.find(AutoDrop.Items, id) then return true end
-        if not AutoDrop.AllSeeds then return false end
-        local item = ItemDB[id]
-        return item ~= nil and item.kind == "seed"
+local function gcAll()
+    local ok, all = pcall(getgc, true)
+    if ok and typeof(all) == "table" then
+        return all
     end
+end
 
-    AutoDrop.baseFull = AutoDrop.fullItems
-    function AutoDrop.fullItems()
-        local items = AutoDrop.baseFull()
-        if AutoDrop.AllSeeds and Refs.Inv then
-            local seen = {}
-            for _, id in ipairs(items) do seen[id] = true end
-            for _, slot in pairs(Refs.Inv.slots) do
-                local id = type(slot) == "table" and slot.id or nil
-                local item = type(id) == "number" and ItemDB[id] or nil
-                if item and item.kind == "seed" and not seen[id] and invCount(id) >= 200 then
-                    seen[id] = true
-                    items[#items + 1] = id
-                end
+local world
+local function findWorld()
+    if world then
+        return
+    end
+    local all = gcAll()
+    if not all then
+        return
+    end
+    for _, t in pairs(all) do
+        if typeof(t) == "table"
+            and type(rawget(t, "w")) == "number"
+            and type(rawget(t, "h")) == "number"
+            and typeof(rawget(t, "fg")) == "table"
+            and typeof(rawget(t, "goTo")) == "function" then
+            world = t
+            return
+        end
+    end
+end
+
+local posMode
+local posX, posY
+local posDiag = "not scanned"
+
+local function getUps(fn)
+    if typeof(fn) ~= "function" then
+        return nil, "not a function"
+    end
+    local ok1, u1 = pcall(function()
+        return debug.getupvalues(fn)
+    end)
+    if ok1 and typeof(u1) == "table" and next(u1) then
+        return u1, "debug"
+    end
+    if typeof(getupvalues) == "function" then
+        local ok2, u2 = pcall(getupvalues, fn)
+        if ok2 and typeof(u2) == "table" and next(u2) then
+            return u2, "getupvalues"
+        end
+    end
+    return nil, "no upvalues"
+end
+
+local function findPos()
+    if not world then
+        posDiag = "no world"
+        return
+    end
+    local ups, how = getUps(rawget(world, "goTo"))
+    if not ups then
+        posDiag = "ups:" .. tostring(how)
+        return
+    end
+    if type(ups[1]) == "number" and type(ups[2]) == "number" then
+        posX, posY = ups[1], ups[2]
+        posMode = "num"
+        posDiag = how .. " nums"
+        return
+    end
+    local got = {}
+    for _, u in pairs(ups) do
+        if typeof(u) == "table" and type(rawget(u, 1)) == "number" then
+            got[#got + 1] = u
+        end
+    end
+    if #got >= 2 then
+        posX, posY = got[1], got[2]
+        posMode = "tbl"
+        posDiag = how .. " tables"
+    else
+        posDiag = "found " .. tostring(#got) .. " (" .. tostring(how) .. ")"
+    end
+end
+
+local function readPos()
+    if posMode == "num" and world then
+        local ups = getUps(rawget(world, "goTo"))
+        if ups and type(ups[1]) == "number" and type(ups[2]) == "number" then
+            posX, posY = ups[1], ups[2]
+            return posX, posY
+        end
+        return nil, nil
+    elseif posMode == "tbl" then
+        return posX[1], posY[1]
+    end
+end
+
+local itemDb
+local function findItemDb()
+    if itemDb then
+        return
+    end
+    local all = gcAll()
+    if not all then
+        return
+    end
+    for _, t in pairs(all) do
+        if typeof(t) == "table" then
+            local d = rawget(t, 2)
+            if typeof(d) == "table" and rawget(d, "name") == "Dirt" then
+                itemDb = t
+                return
             end
         end
-        return items
     end
+end
 
-    function AutoDrop.labels()]==],
-    },
-    {
-        name = "drop saat trip",
-        old = [==[if table.find(AutoDrop.Items, id) and invCount(id) >= 200 then]==],
-        new = [==[if AutoDrop.covers(id) and invCount(id) >= 200 then]==],
-    },
-    {
-        name = "validasi toggle",
-        old = [==[local reason = #AutoDrop.Items == 0 and "Pilih item dulu" or AutoDrop.targetError()]==],
-        new = [==[local reason = (#AutoDrop.Items == 0 and not AutoDrop.AllSeeds) and "Pilih item dulu" or AutoDrop.targetError()]==],
-    },
-    {
-        name = "Farmer tidak dobel drop",
-        old = [==[not (AutoDrop.On and table.find(AutoDrop.Items, id))]==],
-        new = [==[not (AutoDrop.On and AutoDrop.covers(id))]==],
-    },
-    {
-        name = "Auto Farm tidak dobel drop",
-        old = [==[not (AutoDrop.On and table.find(AutoDrop.Items, seed))]==],
-        new = [==[not (AutoDrop.On and AutoDrop.covers(seed))]==],
-    },
-    {
-        name = "toggle AFK di menu",
-        old = [==[local pointBox = box(tab, "Atur titik drop", true)]==],
-        new = [==[local pointBox = box(tab, "Atur titik drop", true)
-
-    safe(function()
-        UI.AutoDropAllSeeds = controls:Toggle({
-            Title = "AFK: drop semua seed",
-            Desc = "Semua jenis seed yang stack-nya penuh (200) ikut di-drop ke tile drop. Block tidak. Nyalakan juga 'Pantau item penuh'.",
-            Value = AutoDrop.AllSeeds,
-            Callback = function(on)
-                AutoDrop.AllSeeds = on
-                if on and not AutoDrop.On then
-                    notify("Auto Drop", "Nyalakan juga 'Pantau item penuh' dan atur tile drop", 4)
-                end
-                if Session.Ready then Config.save(true) end
-            end,
-        })
-    end)]==],
-    },
-}
-
----------------------------------------------------------------------
--- FPS BOOST: toggle + opsi di tab Pengaturan > Opsi
----------------------------------------------------------------------
-local FPS = {
-    {
-        name = "menu FPS Boost",
-        old = [==[local OptTab = Box.SetOpt]==],
-        new = [==[local OptTab = Box.SetOpt
-
-do (function()
-    local Lighting = game:GetService("Lighting")
-    local PerfTab = Box.SetPerf or OptTab
-    local Boost = {
-        On = false, Cap = 40, Quality = true, Shadows = true, Hide3D = false, HideGui = false, Saved = nil,
-    }
-    Session.FpsBoost = Boost
-    Config.add("FpsBoost", Boost, { "Cap", "Quality", "Shadows", "Hide3D", "HideGui" })
-
-    local function setCap(n)
-        local f = setfpscap or set_fps_cap
-        if type(f) ~= "function" and syn then f = syn.set_fps_cap end
-        if type(f) ~= "function" then return false end
-        return (pcall(f, n))
+local function tileNow()
+    local x, y = readPos()
+    if not (x and y) then
+        return nil, nil
     end
+    return math.floor(x), math.floor(y - 0.475)
+end
 
-    local function apply()
-        local s = { effects = {} }
-        Boost.Saved = s
-        s.lite, s.visual = State.LiteMode, State.Visual
-        if not State.LiteMode then setLite(true) end
-        State.Visual = false
-        if Boost.Quality then
-            pcall(function()
-                local r = settings().Rendering
-                s.quality = r.QualityLevel
-                r.QualityLevel = Enum.QualityLevel.Level01
-            end)
-        end
-        if Boost.Shadows then
-            pcall(function()
-                s.shadows = Lighting.GlobalShadows
-                Lighting.GlobalShadows = false
-                for _, e in ipairs(Lighting:GetChildren()) do
-                    if e:IsA("PostEffect") then
-                        s.effects[e] = e.Enabled
-                        e.Enabled = false
-                    end
-                end
-            end)
-        end
-        if Boost.Hide3D then
-            if pcall(function() RunService:Set3dRenderingEnabled(false) end) then s.hide3d = true end
-        end
-        if Boost.HideGui then
-            local gg = PlayerGui:FindFirstChild("GameGui")
-            if gg and gg:IsA("ScreenGui") then
-                s.gui, s.guiOn = gg, gg.Enabled
-                gg.Enabled = false
+local function tileId(x, y)
+    if not world or typeof(world.fg) ~= "table" then
+        return 0
+    end
+    local row = world.fg[y]
+    local id = (row and row[x]) or 0
+    if typeof(id) ~= "number" then
+        return 0
+    end
+    return id
+end
+
+local function tileLabel(x, y)
+    local id = tileId(x, y)
+    local def = itemDb and itemDb[id]
+    return string.format("%s (%d)", (def and def.name) or "Air", id)
+end
+
+local function writePos(nx, ny)
+    if typeof(debug.setupvalues) ~= "function" or not world then
+        return false, "no setupvalues"
+    end
+    local ups = getUps(rawget(world, "goTo"))
+    if not ups then
+        return false, "no ups"
+    end
+    local ox, oy = nil, nil
+    if type(ups[1]) == "number" and type(ups[2]) == "number" then
+        ox, oy = ups[1], ups[2]
+    end
+    local patch = { [1] = nx, [2] = ny }
+    local n = 0
+    for i = 1, #ups do
+        local v = ups[i]
+        if type(v) == "number" and ox then
+            if math.abs(v - ox) < 1e-6 then
+                patch[i] = nx
+                n = n + 1
+            elseif math.abs(v - oy) < 1e-6 then
+                patch[i] = ny
+                n = n + 1
+            elseif math.abs(v - (oy - 0.5)) < 1e-6 then
+                patch[i] = ny - 0.5
+                n = n + 1
             end
         end
-        s.fps = setCap(Boost.Cap)
-        if not s.fps then notify("FPS Boost", "Executor tidak punya setfpscap, batas FPS dilewati", 4) end
     end
-
-    local function restore()
-        local s = Boost.Saved
-        if not s then return end
-        Boost.Saved = nil
-        if s.fps then setCap(60) end
-        if s.quality then pcall(function() settings().Rendering.QualityLevel = s.quality end) end
-        if s.shadows ~= nil then pcall(function() Lighting.GlobalShadows = s.shadows end) end
-        for e, was in pairs(s.effects) do pcall(function() e.Enabled = was end) end
-        if s.hide3d then pcall(function() RunService:Set3dRenderingEnabled(true) end) end
-        if s.gui then pcall(function() s.gui.Enabled = s.guiOn end) end
-        if s.lite == false then setLite(false) end
-        if s.visual ~= nil then State.Visual = s.visual end
+    local ok, err = pcall(debug.setupvalues, rawget(world, "goTo"), patch)
+    if not ok then
+        return false, tostring(err)
     end
+    return true, "slots " .. tostring(n)
+end
 
-    function Boost.set(on)
-        if on == Boost.On then return end
-        Boost.On = on
-        if on then apply() else restore() end
+local function attempt(tx, ty)
+    local okGo, errGo = pcall(world.goTo, tx, ty)
+    local okSet, msgSet = writePos(tx + 0.5, ty + 1)
+    return okGo, errGo, okSet, msgSet
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "HowlNoclip"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 999
+do
+    local ok, hui = pcall(function()
+        return gethui and gethui()
+    end)
+    gui.Parent = (ok and hui) or game:GetService("CoreGui")
+end
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(272, 306)
+frame.Position = UDim2.new(0.5, -136, 0, 64)
+frame.BackgroundColor3 = Color3.fromRGB(22, 24, 30)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -40, 0, 34)
+title.Position = UDim2.fromOffset(10, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextColor3 = Color3.fromRGB(235, 238, 245)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Noclip"
+title.Parent = frame
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(30, 30)
+close.Position = UDim2.new(1, -34, 0, 2)
+close.BackgroundColor3 = Color3.fromRGB(48, 50, 60)
+close.TextColor3 = Color3.fromRGB(235, 238, 245)
+close.Font = Enum.Font.GothamBold
+close.TextSize = 14
+close.Text = "X"
+close.Parent = frame
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = close
+
+local here = Instance.new("TextLabel")
+here.Size = UDim2.new(1, -20, 0, 20)
+here.Position = UDim2.fromOffset(10, 36)
+here.BackgroundTransparency = 1
+here.Font = Enum.Font.Code
+here.TextSize = 13
+here.TextColor3 = Color3.fromRGB(150, 200, 255)
+here.TextXAlignment = Enum.TextXAlignment.Left
+here.Text = "Reading position..."
+here.Parent = frame
+
+local function makeBox(x)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.fromOffset(78, 32)
+    box.Position = UDim2.fromOffset(x, 60)
+    box.BackgroundColor3 = Color3.fromRGB(36, 39, 47)
+    box.BorderSizePixel = 0
+    box.Font = Enum.Font.Code
+    box.TextSize = 14
+    box.TextColor3 = Color3.fromRGB(235, 238, 245)
+    box.PlaceholderText = "0"
+    box.Text = ""
+    box.ClearTextOnFocus = false
+    box.Parent = frame
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = box
+    return box
+end
+
+local xBox = makeBox(10)
+local yBox = makeBox(96)
+
+local function makeButton(text, x, y, w, cb)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(w, 32)
+    b.Position = UDim2.fromOffset(x, y)
+    b.BackgroundColor3 = Color3.fromRGB(48, 52, 64)
+    b.BorderSizePixel = 0
+    b.Font = Enum.Font.GothamMedium
+    b.TextSize = 13
+    b.TextColor3 = Color3.fromRGB(235, 238, 245)
+    b.Text = text
+    b.Parent = frame
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = b
+    b.MouseButton1Click:Connect(cb)
+    return b
+end
+
+local logLabel = Instance.new("TextLabel")
+logLabel.Size = UDim2.new(1, -20, 0, 92)
+logLabel.Position = UDim2.fromOffset(10, 206)
+logLabel.BackgroundColor3 = Color3.fromRGB(16, 18, 22)
+logLabel.BorderSizePixel = 0
+logLabel.Font = Enum.Font.Code
+logLabel.TextSize = 11
+logLabel.TextWrapped = true
+logLabel.TextColor3 = Color3.fromRGB(210, 215, 225)
+logLabel.TextXAlignment = Enum.TextXAlignment.Left
+logLabel.TextYAlignment = Enum.TextYAlignment.Top
+logLabel.Text = ""
+logLabel.Parent = frame
+local logCorner = Instance.new("UICorner")
+logCorner.CornerRadius = UDim.new(0, 6)
+logCorner.Parent = logLabel
+
+local function setLog(text)
+    logLabel.Text = text
+end
+
+local function refreshHere()
+    local x, y = tileNow()
+    if x then
+        here.Text = string.format("%d, %d  |  %s", x, y, tileLabel(x, y))
+    else
+        here.Text = "Position unknown (" .. tostring(posDiag) .. ")"
     end
+end
 
-    local function changed()
-        if Boost.On then
-            restore()
-            apply()
+local function ensure()
+    if not world then
+        findWorld()
+    end
+    if world and not posMode then
+        findPos()
+    end
+end
+
+local function fillCurrent()
+    ensure()
+    local x, y = tileNow()
+    if x then
+        xBox.Text = tostring(x)
+        yBox.Text = tostring(y)
+    end
+end
+
+local function report(tx, ty, okGo, errGo, okSet, msgSet)
+    local x0, y0 = readPos()
+    setLog(string.format(
+        "-> %d,%d (now %.2f,%.2f)\n%s\n%s\nat %s",
+        tx, ty, x0 or -1, y0 or -1,
+        "goTo: " .. (okGo and "ok" or tostring(errGo)),
+        "set: " .. (okSet and tostring(msgSet) or tostring(msgSet)),
+        tileLabel(tx, ty)
+    ))
+end
+
+local function teleportTo(tx, ty)
+    ensure()
+    if not world then
+        setLog("World not found")
+        return
+    end
+    if not posMode then
+        setLog("Position not found: " .. tostring(posDiag))
+        return
+    end
+    local okGo, errGo, okSet, msgSet = attempt(tx, ty)
+    report(tx, ty, okGo, errGo, okSet, msgSet)
+end
+
+local ghostOn = false
+local ghostBtn
+
+local function applyGhost()
+    if not world then
+        return
+    end
+    pcall(function()
+        world.ghost = ghostOn
+    end)
+end
+
+local function toggleGhost()
+    ensure()
+    ghostOn = not ghostOn
+    applyGhost()
+    ghostBtn.Text = ghostOn and "Ghost: ON" or "Ghost: OFF"
+    ghostBtn.BackgroundColor3 = ghostOn and Color3.fromRGB(150, 60, 60) or Color3.fromRGB(48, 52, 64)
+    setLog(ghostOn and "Ghost on: walk through walls (WASD)" or "Ghost off")
+end
+
+local function go()
+    local tx = tonumber(xBox.Text)
+    local ty = tonumber(yBox.Text)
+    if not tx or not ty then
+        setLog("Bad X/Y")
+        return
+    end
+    teleportTo(math.floor(tx), math.floor(ty))
+end
+
+local VIM = game:GetService("VirtualInputManager")
+
+local function tapKey(key, hold)
+    local ok = pcall(function()
+        VIM:SendKeyEvent(true, key, false, game)
+    end)
+    task.delay(hold, function()
+        pcall(function()
+            VIM:SendKeyEvent(false, key, false, game)
+        end)
+    end)
+    return ok
+end
+
+local function tapMove(label, key)
+    ensure()
+    local x0, y0 = readPos()
+    local ok = tapKey(key, 0.05)
+    task.delay(0.2, function()
+        local x1, y1 = readPos()
+        setLog(string.format(
+            "%s  key %s (%s)\nfrom %.2f,%.2f\nnow  %.2f,%.2f",
+            label, key.Name, ok and "sent" or "fail",
+            x0 or -1, y0 or -1, x1 or -1, y1 or -1
+        ))
+    end)
+end
+
+makeButton("Here", 186, 60, 76, fillCurrent)
+ghostBtn = makeButton("Ghost: OFF", 10, 100, 252, toggleGhost)
+local goBtn = makeButton("Teleport X/Y", 10, 136, 252, go)
+goBtn.BackgroundColor3 = Color3.fromRGB(58, 122, 96)
+makeButton("Down .5", 10, 172, 60, function()
+    tapMove("Down", Enum.KeyCode.Down)
+end)
+makeButton("Up .5", 74, 172, 60, function()
+    tapMove("Up", Enum.KeyCode.Up)
+end)
+makeButton("Left .5", 138, 172, 60, function()
+    tapMove("Left", Enum.KeyCode.Left)
+end)
+makeButton("Right .5", 202, 172, 60, function()
+    tapMove("Right", Enum.KeyCode.Right)
+end)
+
+task.spawn(function()
+    ensure()
+    fillCurrent()
+    refreshHere()
+    while gui.Parent do
+        task.wait(0.5)
+        refreshHere()
+        if ghostOn then
+            applyGhost()
         end
     end
+end)
 
-    safe(function()
-        PerfTab:Toggle({
-            Title = "FPS Boost",
-            Desc = "Kurangi beban HP: batas FPS, grafis terendah, Mode Lite & animasi dimatikan. Semua dikembalikan saat dimatikan.",
-            Value = false,
-            Callback = function(on) Boost.set(on) end,
-        })
-    end)
+close.MouseButton1Click:Connect(function()
+    ghostOn = false
+    applyGhost()
+    gui:Destroy()
+end)
 
-    addNumber(PerfTab, {
-        Title = "Batas FPS",
-        Desc = "Makin rendah makin ringan. Jangan di bawah 30 kalau pakai Clear / Farmer / Pabrik",
-        Min = 15, Max = 60, Step = 5, Default = Boost.Cap,
-        Callback = function(v)
-            Boost.Cap = math.floor(v)
-            if Boost.On then setCap(Boost.Cap) end
-        end,
-    })
-
-    safe(function()
-        PerfTab:Toggle({
-            Title = "Boost: kualitas grafis terendah",
-            Value = Boost.Quality,
-            Callback = function(on) Boost.Quality = on changed() end,
-        })
-    end)
-
-    safe(function()
-        PerfTab:Toggle({
-            Title = "Boost: matikan bayangan & efek layar",
-            Value = Boost.Shadows,
-            Callback = function(on) Boost.Shadows = on changed() end,
-        })
-    end)
-
-    safe(function()
-        PerfTab:Toggle({
-            Title = "Boost: matikan render 3D",
-            Desc = "Game digambar lewat UI, jadi tampilan tidak berubah. Bisa bikin latar hitam di sebagian executor.",
-            Value = Boost.Hide3D,
-            Callback = function(on) Boost.Hide3D = on changed() end,
-        })
-    end)
-
-    safe(function()
-        PerfTab:Toggle({
-            Title = "Boost: sembunyikan layar game (AFK)",
-            Desc = "Layar game jadi kosong tapi farming tetap jalan. Paling hemat GPU. Matikan untuk melihat game lagi.",
-            Value = Boost.HideGui,
-            Callback = function(on) Boost.HideGui = on changed() end,
-        })
-    end)
-
-    -- dipulihkan otomatis saat script ditutup / dijalankan ulang
-    table.insert(Connections, { Disconnect = function() pcall(restore) end })
-end)() end]==],
-    },
-}
-
-
----------------------------------------------------------------------
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+----------------------------------------------------------------
 -- SUSUNAN MENU BARU: grup, urutan & nama tab
 --   Farming: Auto Farm, Harvest, Splice | World: Clear World, Dirt Farm, Pabrik
 --   Shop: Drop, Titik Drop, Vending, Tas | Info: Growscan, Statistik
