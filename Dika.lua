@@ -19,7 +19,7 @@
 -- inventory berisi Transmatter Field >= 200, lalu execute.
 
 local ITEM_ID = 242 -- Transmatter Field (terverifikasi dari item table)
-local DROP_COUNT = 200
+local DROP_COUNT = 21
 local DROP_DELAY = 0.35 -- >= 0.3 dtk (aturan drop game)
 local SPIN_DELAY = 0.7 -- >= 0.6 dtk (debounce spin client)
 local MAX_CYCLES = 0 -- 0 = jalan terus sampai inventory < 200 / stop
