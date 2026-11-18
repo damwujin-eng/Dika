@@ -1,29 +1,17 @@
-Buatkan script Lua untuk game bergaya Growtopia dengan spesifikasi berikut.
+local id = 2488
+local count = 200
 
-Variabel di bagian atas:
-- id = 2488 (ID item)
-- count = 200 (jumlah item)
+function Find()
+    SendPacket(2, "action|dialog_return\ndialog_name|nupirkti\nname|Roulette Wheel\npirkti_id|" .. id .. "\ncount|" .. count .. "\n")
+end
 
-Fungsi:
-1. Find() mengirim paket beli dengan SendPacket(2, ...). Isinya, tiap baris dipisah newline:
-   action|dialog_return
-   dialog_name|nupirkti
-   name|Roulette Wheel
-   pirkti_id|<id>
-   count|<count>
+function Drop()
+    SendPacket(2, "action|dialog_return\ndialog_name|drop_item\nitemID|" .. id .. "\ncount|" .. count .. "\n")
+end
 
-2. Drop() mengirim paket drop dengan SendPacket(2, ...). Isinya:
-   action|dialog_return
-   dialog_name|drop_item
-   itemID|<id>
-   count|<count>
-
-Alur utama:
-- Jalankan loop tanpa henti (while true do).
-- Di tiap putaran: panggil Drop(), sleep(300), panggil Find(), sleep(300).
-
-Aturan kode:
-- Gunakan [[ ]] atau "\n" supaya setiap pasangan key|value berada di baris terpisah.
-- Sambung variabel id dan count ke string dengan operator "..".
-- Beri komentar singkat di setiap fungsi.
-- Beri hanya kode Lua yang siap pakai, tanpa penjelasan panjang.
+while true do
+    Drop()
+    sleep(300)
+    Find()
+    sleep(300)
+end
