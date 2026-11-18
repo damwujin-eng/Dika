@@ -18,7 +18,7 @@
 -- Cara pakai: berdiri DEKAT Roulette Wheel (758) di world, pastikan
 -- inventory berisi Transmatter Field >= 200, lalu execute.
 
-local ITEM_ID = 2488 -- Transmatter Field (terverifikasi dari item table)
+local ITEM_ID = 242 -- Transmatter Field (terverifikasi dari item table)
 local DROP_COUNT = 200
 local DROP_DELAY = 0.35 -- >= 0.3 dtk (aturan drop game)
 local SPIN_DELAY = 0.7 -- >= 0.6 dtk (debounce spin client)
