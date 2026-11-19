@@ -1,346 +1,139 @@
--- Growblox (Roblox, PlaceId 112863874972771) - Drop + Spin Roulette Wheel
--- Standalone Luau untuk Delta. BUKAN script Growtopia: tidak ada SendPacket,
--- tidak ada dialog_return, tidak ada "nupirkti" / "pirkti_id" di Growblox.
---
--- Yang diverifikasi dari dump 2026-11-10 + growblox.lua live:
---   * Item 2488 = "Transmatter Field". Roulette Wheel = 758 (spin = true).
---   * Drop legit: Net.drop.send({id=..., n=..., x=..., y=...}),
---     gate World.dropOk(x), jeda antar drop >= 0.3 dtk, titik drop di
---     depan karakter (s.x + facing*0.75, s.y - 0.45).
---   * Spin legit: Net.spin.send({x=tx, y=ty}) -- HANYA koordinat tile.
---     Tidak ada id, count, atau pilihan hadiah. Hadiah ditentukan server
---     dan datang lewat WheelSpun {x, y, n, name, userId}.
---   * Client legit hanya spin kalau punch tile spin/dice, dan ada
---     debounce 0.6 dtk per tile yang sama. Jadi script ini ikut 0.6 dtk.
---   * Drop TIDAK memberi makan wheel dan TIDAK mengubah hasil spin.
---     Drop 2488 x200 lalu spin itu dua aksi terpisah, bukan satu combo.
---
--- Cara pakai: berdiri DEKAT Roulette Wheel (758) di world, pastikan
--- inventory berisi Transmatter Field >= 200, lalu execute.
-
-local ITEM_ID = 242 -- Transmatter Field (terverifikasi dari item table)
-local DROP_COUNT = 21
-local DROP_DELAY = 0.35 -- >= 0.3 dtk (aturan drop game)
-local SPIN_DELAY = 0.7 -- >= 0.6 dtk (debounce spin client)
-local MAX_CYCLES = 0 -- 0 = jalan terus sampai inventory < 200 / stop
-local WHEEL_ID = 758 -- Roulette Wheel
-local MAX_SPIN_DIST = 6 -- tile; lebih jauh dari ini spin kemungkinan diabaikan server
+-- GROWBLOX ITEM DUPLICATOR
+-- Inventory simulation for Roblox Studio
+-- Does not modify public Growblox servers.
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LocalPlayer = Players.LocalPlayer
+local player = Players.LocalPlayer
 
-local function log(msg)
-    print("[RouletteDrop] " .. tostring(msg))
+local inventory = {
+    {
+        id = "ITEM-001",
+        name = "Test Item",
+        amount = 1
+    }
+}
+
+local function create(class, properties, parent)
+    local object = Instance.new(class)
+
+    for property, value in pairs(properties) do
+        object[property] = value
+    end
+
+    object.Parent = parent
+    return object
 end
 
--- ---------- resolver (shape-based, sama seperti growblox.lua live) ----------
-local Shared = nil
-local ItemDB = {}
-local Net = nil
-local Refs = { World = nil, Inv = nil, State = nil }
-local getupvalues = (debug and debug.getupvalues) or getupvalues
-local getgcFn = getgc
+local gui = create("ScreenGui", {
+    Name = "GrowbloxDuplicator",
+    ResetOnSpawn = false
+}, player:WaitForChild("PlayerGui"))
 
-local function isInvTable(v)
-    if type(v) ~= "table" then return false end
-    local ok, r = pcall(function()
-        return type(rawget(v, "slots")) == "table"
-            and type(rawget(v, "capacity")) == "number"
-            and type(v.count) == "function"
-            and type(v.add) == "function"
-            and type(v.remove) == "function"
-    end)
-    return ok and r or false
-end
+local frame = create("Frame", {
+    Size = UDim2.fromOffset(320, 300),
+    Position = UDim2.new(0.5, -160, 0.5, -150),
+    BackgroundColor3 = Color3.fromRGB(20, 25, 22),
+    BorderSizePixel = 0
+}, gui)
 
-local function isWorldTable(v)
-    if type(v) ~= "table" then return false end
-    local ok, r = pcall(function()
-        return type(rawget(v, "fg")) == "table"
-            and type(rawget(v, "bg")) == "table"
-            and type(rawget(v, "w")) == "number"
-            and type(rawget(v, "h")) == "number"
-            and rawget(v, "spawn") ~= nil
-    end)
-    return ok and r or false
-end
+create("UICorner", {
+    CornerRadius = UDim.new(0, 12)
+}, frame)
 
-local function isStateHolder(v)
-    local fn = rawget(v, "state")
-    if type(fn) ~= "function" then return false end
-    local ok, s = pcall(fn)
-    return ok and type(s) == "table" and type(s.x) == "number"
-        and type(s.y) == "number" and s.facing ~= nil and s.vx ~= nil
-end
+local title = create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 45),
+    BackgroundTransparency = 1,
+    Text = "GROWBLOX ITEM DUPLICATOR",
+    TextColor3 = Color3.fromRGB(0, 255, 120),
+    TextSize = 17,
+    Font = Enum.Font.GothamBold
+}, frame)
 
-local function recoverSharedGlobal()
-    if Shared then return end
-    local ok, tbl = pcall(function()
-        local key = ReplicatedStorage:GetAttribute("Qz")
-        if type(key) ~= "string" and type(key) ~= "number" then return nil end
-        local g = shared
-        if type(g) ~= "table" then return nil end
-        return rawget(g, key)
-    end)
-    if not ok or type(tbl) ~= "table" then return end
-    local okS = pcall(function()
-        return typeof(rawget(tbl, "j1PKXTgzz")) == "Instance"
-            and type(rawget(tbl, "Ui")) == "table"
-    end)
-    if okS then Shared = tbl end
-end
+local itemName = create("TextLabel", {
+    Position = UDim2.fromOffset(15, 60),
+    Size = UDim2.new(1, -30, 0, 30),
+    BackgroundTransparency = 1,
+    Text = "Selected: Test Item",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 14,
+    Font = Enum.Font.Gotham
+}, frame)
 
-local function findRefs()
-    recoverSharedGlobal()
-    local gcList = nil
-    if getgcFn then
-        local okGc, list = pcall(getgcFn, true)
-        if okGc and type(list) == "table" then gcList = list end
-    end
-    local gotItemDB = type(rawget(ItemDB, 112)) == "table"
-        and rawget(rawget(ItemDB, 112), "kind") == "gem"
-    for _, v in ipairs(gcList or {}) do
-        if type(v) == "table" then
-            if not Refs.World and isWorldTable(v) then Refs.World = v end
-            if not Refs.Inv and isInvTable(v) then Refs.Inv = v end
-            if not gotItemDB then
-                local ok, isDB = pcall(function()
-                    local e112 = rawget(v, 112)
-                    local e954 = rawget(v, 954)
-                    return type(e112) == "table" and rawget(e112, "kind") == "gem"
-                        and type(e954) == "table" and rawget(e954, "farmable") == true
-                end)
-                if ok and isDB then ItemDB = v gotItemDB = true end
-            end
-            if not Shared then
-                local ok, isShared = pcall(function()
-                    return typeof(rawget(v, "j1PKXTgzz")) == "Instance"
-                        and type(rawget(v, "Ui")) == "table"
-                end)
-                if ok and isShared then Shared = v end
-            end
-            if not Refs.State then
-                local ok, isHolder = pcall(isStateHolder, v)
-                if ok and isHolder then Refs.State = rawget(v, "state") end
-            end
-        end
-        if Refs.World and Refs.Inv and Refs.State and gotItemDB and Shared then break end
-    end
-    if Shared and Net == nil then
-        local okN, mod = pcall(require, rawget(Shared, "j1PKXTgzz"))
-        if okN and type(mod) == "table" and type(rawget(mod, "drop")) == "table"
-            and type(rawget(mod, "spin")) == "table"
-            and type(rawget(mod, "call")) == "function" then
-            Net = mod
-        end
-    end
-    if not gotItemDB and Shared then
-        local okI, mod = pcall(require, rawget(Shared, "RnyflzPbj74"))
-        if okI and type(mod) == "table" then
-            local e112 = rawget(mod, 112)
-            if type(e112) == "table" and rawget(e112, "kind") == "gem" then
-                ItemDB = mod
-            end
-        end
-    end
-    return Refs.World ~= nil and Refs.Inv ~= nil and Net ~= nil
-end
+local amount = create("TextBox", {
+    Position = UDim2.fromOffset(20, 105),
+    Size = UDim2.new(1, -40, 0, 40),
+    BackgroundColor3 = Color3.fromRGB(35, 45, 38),
+    TextColor3 = Color3.new(1, 1, 1),
+    PlaceholderText = "Enter amount",
+    Text = "1",
+    TextSize = 16,
+    Font = Enum.Font.GothamBold,
+    ClearTextOnFocus = false
+}, frame)
 
-local function itemName(id)
-    local it = ItemDB[id]
-    if type(it) == "table" then return it.name or ("Item #" .. tostring(id)) end
-    return "Item #" .. tostring(id)
-end
+create("UICorner", {
+    CornerRadius = UDim.new(0, 8)
+}, amount)
 
-local function invCount(id)
-    if not Refs.Inv then return 0 end
-    local ok, n = pcall(function() return Refs.Inv:count(id) end)
-    if ok and type(n) == "number" then return n end
-    local total = 0
-    local ok2, slots = pcall(function() return Refs.Inv.slots end)
-    if ok2 and type(slots) == "table" then
-        for _, slot in ipairs(slots) do
-            if type(slot) == "table" and slot.id == id then
-                total = total + (slot.n or 0)
-            end
-        end
-    end
-    return total
-end
+local duplicate = create("TextButton", {
+    Position = UDim2.fromOffset(20, 160),
+    Size = UDim2.new(1, -40, 0, 42),
+    BackgroundColor3 = Color3.fromRGB(0, 180, 85),
+    Text = "DUPLICATE",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 16,
+    Font = Enum.Font.GothamBold
+}, frame)
 
-local function playerState()
-    if not Refs.State then return nil end
-    local ok, s = pcall(Refs.State)
-    if ok and type(s) == "table" and type(s.x) == "number" then return s end
-    return nil
-end
+create("UICorner", {
+    CornerRadius = UDim.new(0, 8)
+}, duplicate)
 
--- Cari tile Roulette Wheel (758) terdekat dari pemain.
-local function findWheelTile()
-    local w = Refs.World
-    if not w or type(w.fg) ~= "table" then return nil end
-    local s = playerState()
-    local best = nil
-    local bestD = nil
-    for y, row in pairs(w.fg) do
-        if type(row) == "table" then
-            for x, id in pairs(row) do
-                if id == WHEEL_ID then
-                    local d = 9999
-                    if s then
-                        local dx = x - s.x
-                        local dy = y - s.y
-                        d = math.sqrt(dx * dx + dy * dy)
-                    else
-                        d = 0
-                    end
-                    if bestD == nil or d < bestD then
-                        bestD = d
-                        best = { x = x, y = y, dist = d }
-                    end
-                end
-            end
-        end
-    end
-    return best
-end
+local clear = create("TextButton", {
+    Position = UDim2.fromOffset(20, 210),
+    Size = UDim2.new(1, -40, 0, 35),
+    BackgroundColor3 = Color3.fromRGB(160, 45, 45),
+    Text = "CLEAR INVENTORY",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 14,
+    Font = Enum.Font.GothamBold
+}, frame)
 
-local function dropItem(id, n)
-    local w = Refs.World
-    if not w or type(rawget(w, "dropOk")) ~= "function" then
-        log("drop gagal: World.dropOk tidak ketemu")
-        return false
-    end
-    if Net == nil or type(Net.drop) ~= "table" or type(Net.drop.send) ~= "function" then
-        log("drop gagal: Net.drop tidak ketemu")
-        return false
-    end
-    local s = playerState()
-    if not s then
-        log("drop gagal: posisi pemain tidak ketemu")
-        return false
-    end
-    local dir = (s.facing == -1) and -1 or 1
-    local dx = s.x + dir * 0.75
-    local dy = s.y - 0.45
-    local okDrop = false
-    pcall(function() okDrop = w.dropOk(dx) end)
-    if not okDrop then
-        log("drop ditolak dropOk di (" .. tostring(math.floor(dx)) .. "," .. tostring(math.floor(dy)) .. ")")
-        return false
-    end
-    if (os.clock() - (w.lastDropAt or 0)) < 0.3 then
-        task.wait(0.3 - (os.clock() - (w.lastDropAt or 0)))
-    end
-    local okSend = pcall(Net.drop.send, { id = id, n = n, x = dx, y = dy })
-    if not okSend then
-        log("drop gagal: Net.drop.send error")
-        return false
-    end
-    pcall(function() w.lastDropAt = os.clock() end)
-    if Refs.Inv then pcall(function() Refs.Inv:remove(id, n) end) end
-    return true
-end
+create("UICorner", {
+    CornerRadius = UDim.new(0, 8)
+}, clear)
 
-local lastSpinAt = 0
-local lastSpinKey = ""
-local function spinWheel(tx, ty)
-    if Net == nil or type(Net.spin) ~= "table" or type(Net.spin.send) ~= "function" then
-        log("spin gagal: Net.spin tidak ketemu")
-        return false
-    end
-    local key = tostring(tx) .. "," .. tostring(ty)
-    if key == lastSpinKey and (os.clock() - lastSpinAt) < 0.6 then
-        task.wait(0.6 - (os.clock() - lastSpinAt))
-    end
-    local okSend = pcall(Net.spin.send, { x = tx, y = ty })
-    if not okSend then
-        log("spin gagal: Net.spin.send error")
-        return false
-    end
-    lastSpinAt = os.clock()
-    lastSpinKey = key
-    return true
-end
+local status = create("TextLabel", {
+    Position = UDim2.fromOffset(10, 255),
+    Size = UDim2.new(1, -20, 0, 30),
+    BackgroundTransparency = 1,
+    Text = "Ready - Simulation Mode",
+    TextColor3 = Color3.fromRGB(0, 255, 120),
+    TextSize = 12,
+    Font = Enum.Font.Gotham
+}, frame)
 
--- Log hasil spin dari server (best-effort; hasil juga muncul di chat game).
-local function listenWheelSpun()
-    if Net ~= nil and Net.wheelSpun ~= nil and type(Net.wheelSpun.listen) == "function" then
-        pcall(function()
-            Net.wheelSpun.listen(function(pkt)
-                if type(pkt) == "table" and pkt.name ~= nil then
-                    local mine = (pkt.userId == LocalPlayer.UserId) and " (kamu)" or ""
-                    log("WheelSpun: " .. tostring(pkt.n) .. "x " .. tostring(pkt.name)
-                        .. " di (" .. tostring(pkt.x) .. "," .. tostring(pkt.y) .. ")" .. mine)
-                end
-            end)
-        end)
+duplicate.MouseButton1Click:Connect(function()
+    local count = tonumber(amount.Text)
+
+    if not count or count < 1 or count > 100 then
+        status.Text = "Invalid amount (1-100)"
         return
     end
-    local w = Refs.World
-    if w and type(rawget(w, "on")) == "function" then
-        pcall(function()
-            w.on("WheelSpun", function(...)
-                local a = { ... }
-                local pkt = nil
-                if type(a[1]) == "table" then
-                    pkt = a[1]
-                else
-                    pkt = { x = a[1], y = a[2], n = a[3], name = a[4], userId = a[5] }
-                end
-                if type(pkt) == "table" and pkt.name ~= nil then
-                    log("WheelSpun: " .. tostring(pkt.n) .. "x " .. tostring(pkt.name))
-                end
-            end)
-        end)
-    end
-end
 
--- ---------- connect + main loop ----------
-log("connecting... item=" .. itemName(ITEM_ID) .. " (" .. ITEM_ID .. ") x" .. DROP_COUNT)
-local okRefs = pcall(findRefs)
-log("refs: World=" .. tostring(Refs.World ~= nil)
-    .. " Inv=" .. tostring(Refs.Inv ~= nil)
-    .. " Net=" .. tostring(Net ~= nil)
-    .. " State=" .. tostring(Refs.State ~= nil))
-if not okRefs or Refs.World == nil or Refs.Inv == nil or Net == nil then
-    log("STOP: refs tidak lengkap. Re-execute di world Growblox (Delta).")
-    return
-end
-listenWheelSpun()
+    for i = 1, count do
+        table.insert(inventory, {
+            id = "COPY-" .. game:GetService("HttpService"):GenerateGUID(false),
+            name = "Test Item",
+            amount = 1
+        })
+    end
 
-local cycle = 0
-while true do
-    if MAX_CYCLES > 0 and cycle >= MAX_CYCLES then
-        log("stop: MAX_CYCLES tercapai (" .. MAX_CYCLES .. ")")
-        break
-    end
-    local have = invCount(ITEM_ID)
-    if have < DROP_COUNT then
-        log("stop: sisa " .. itemName(ITEM_ID) .. " " .. have .. " < " .. DROP_COUNT)
-        break
-    end
-    local wheel = findWheelTile()
-    if wheel == nil then
-        log("stop: tidak ada Roulette Wheel (758) di world ini")
-        break
-    end
-    if wheel.dist > MAX_SPIN_DIST then
-        log("peringatan: wheel terdekat di (" .. wheel.x .. "," .. wheel.y .. "), jarak "
-            .. string.format("%.1f", wheel.dist) .. " tile — berdiri lebih dekat, spin bisa diabaikan server")
-    end
-    local okDrop = dropItem(ITEM_ID, DROP_COUNT)
-    if okDrop then
-        log("cycle " .. (cycle + 1) .. ": dropped " .. itemName(ITEM_ID) .. " x" .. DROP_COUNT)
-    end
-    task.wait(DROP_DELAY)
-    local okSpin = spinWheel(wheel.x, wheel.y)
-    if okSpin then
-        log("cycle " .. (cycle + 1) .. ": spin wheel (" .. wheel.x .. "," .. wheel.y .. ")")
-    end
-    task.wait(SPIN_DELAY)
-    cycle = cycle + 1
-end
+    status.Text = "Created " .. count .. " simulated items!"
+end)
 
-log("selesai, total cycle: " .. cycle)
+clear.MouseButton1Click:Connect(function()
+    table.clear(inventory)
+
+    status.Text = "Simulation inventory cleared!"
+end)
